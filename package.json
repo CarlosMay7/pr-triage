@@ -1,0 +1,30 @@
+{
+  "name": "@carlosmay7/pr-triage",
+  "version": "0.1.0",
+  "description": "CLI and GitHub Action to triage open PR queues using Git object-level merge-ort analysis",
+  "type": "module",
+  "main": "./dist/index.js",
+  "bin": {
+    "pr-triage": "./dist/cli/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "keywords": [
+    "git",
+    "github-action",
+    "pr-triage",
+    "merge-tree",
+    "merge-queue",
+    "cli"
+  ],
+  "author": "Carlos May",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}
