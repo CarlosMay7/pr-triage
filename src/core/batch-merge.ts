@@ -190,6 +190,7 @@ export class BatchMergeCoordinator {
       });
 
       child.on('close', (code) => {
+        if (closed) return;
         closed = true;
         if (timer) clearTimeout(timer);
 

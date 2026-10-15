@@ -99,6 +99,14 @@ export function parseMergeTreeBlock(
 
   // 2. Messages section (ends with \0\0 -> when num-paths entry is empty)
   const conflicts: ConflictDetail[] = [];
+  const compiledOidMatchers =
+    oidLabels && oidLabels.size > 0
+      ? Array.from(oidLabels.entries()).map(([oid, label]) => ({
+          oid,
+          label,
+          regex: new RegExp(`\\b${oid.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'g'),
+        }))
+      : [];
 
   while (true) {
     if (offset >= len) return null; // incomplete
@@ -145,11 +153,10 @@ export function parseMergeTreeBlock(
     }
 
     // Replace OIDs with human labels if provided
-    if (oidLabels && oidLabels.size > 0) {
-      for (const [oid, label] of oidLabels) {
+    if (compiledOidMatchers.length > 0) {
+      for (const { oid, label, regex } of compiledOidMatchers) {
         if (message.includes(oid)) {
-          const escapedOid = oid.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-          message = message.replace(new RegExp(`\\b${escapedOid}\\b`, 'g'), label);
+          message = message.replace(regex, label);
         }
       }
     }
