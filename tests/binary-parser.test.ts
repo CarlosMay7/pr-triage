@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { GitFixture } from './helpers/git-fixture.js';
 import { GitSandbox } from '../src/core/git-sandbox.js';
-import { BatchMergeCoordinator, MergeTask } from '../src/core/batch-merge.js';
+import { BatchMergeCoordinator, MergeTask, assertValidGitRef } from '../src/core/batch-merge.js';
+import { parseMergeTreeBlock } from '../src/core/binary-parser.js';
 
 describe('Binary Parser & Batch Coordinator (Test 4 from RFC v3.0)', () => {
   let fixture: GitFixture;
@@ -112,6 +113,40 @@ describe('Binary Parser & Batch Coordinator (Test 4 from RFC v3.0)', () => {
     expect(resClean2?.status).toBe('clean');
     if (resClean2?.status === 'clean') {
       expect(resClean2.treeOid).toMatch(/^[0-9a-f]{40}$/);
+    }
+  });
+
+  it('validates git refs to prevent protocol command injection', () => {
+    expect(() => assertValidGitRef('main\nother', 'branchA')).toThrow(/Invalid git reference/);
+    expect(() => assertValidGitRef('--exec=calc', 'branchA')).toThrow(/Invalid git reference/);
+    expect(() => assertValidGitRef('branch with space', 'branchA')).toThrow(/Invalid git reference/);
+    expect(() => assertValidGitRef('main..feature', 'branchA')).toThrow(/Invalid git reference/);
+    expect(() => assertValidGitRef('valid-branch_123', 'branchA')).not.toThrow();
+  });
+
+  it('replaces oidLabels respecting word boundaries', () => {
+    const oidLabels = new Map<string, string>([
+      ['0d4e4b', '#10 (feature)'],
+    ]);
+
+    // Construct a synthetic conflict block with oid in message
+    // Grammar: '0'\0<treeOid>\0\0 1\0file.ts\0CONFLICT (content)\0added in 0d4e4b but not in 0d4e4b99\0\0
+    const rawMsg = 'added in 0d4e4b but not in 0d4e4b99';
+    const buf = Buffer.concat([
+      Buffer.from('0\0'),
+      Buffer.from('a'.repeat(40) + '\0'),
+      Buffer.from('\0'), // empty index entries
+      Buffer.from('1\0file.ts\0CONFLICT (content)\0' + rawMsg + '\0\0'),
+    ]);
+
+    const parsed = parseMergeTreeBlock(buf, 0, oidLabels);
+    expect(parsed).not.toBeNull();
+    if (parsed && parsed.evaluation.status === 'conflict') {
+      const msg = parsed.evaluation.conflicts[0].message;
+      // Exact match '0d4e4b' was replaced
+      expect(msg).toContain('added in #10 (feature)');
+      // Partial prefix '0d4e4b99' was NOT corrupted
+      expect(msg).toContain('0d4e4b99');
     }
   });
 });

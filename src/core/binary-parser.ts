@@ -148,7 +148,8 @@ export function parseMergeTreeBlock(
     if (oidLabels && oidLabels.size > 0) {
       for (const [oid, label] of oidLabels) {
         if (message.includes(oid)) {
-          message = message.replaceAll(oid, label);
+          const escapedOid = oid.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          message = message.replace(new RegExp(`\\b${escapedOid}\\b`, 'g'), label);
         }
       }
     }

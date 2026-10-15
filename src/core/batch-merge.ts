@@ -17,6 +17,14 @@ export interface BatchMergeOptions {
   timeoutMs?: number;
 }
 
+const SAFE_GIT_REF_REGEX = /^[^\s\0~^:?*[\]\\]+$/;
+
+export function assertValidGitRef(ref: string, fieldName: string): void {
+  if (!ref || !SAFE_GIT_REF_REGEX.test(ref) || ref.startsWith('-') || ref.includes('..')) {
+    throw new Error(`Invalid git reference in ${fieldName}: "${ref}"`);
+  }
+}
+
 export class BatchMergeCoordinator {
   private readonly cwd: string;
   private readonly sandbox?: GitSandbox;
@@ -81,6 +89,13 @@ export class BatchMergeCoordinator {
     onEvaluation: (indexInChunk: number, evalResult: MergeEvaluation) => void
   ): Promise<{ evaluatedCount: number; errorOnCurrent: boolean; stderr: string }> {
     return new Promise((resolve, reject) => {
+      // Validate inputs against injection
+      for (const task of chunkTasks) {
+        if (task.base !== undefined) assertValidGitRef(task.base, 'base');
+        assertValidGitRef(task.branchA, 'branchA');
+        assertValidGitRef(task.branchB, 'branchB');
+      }
+
       const env = this.sandbox ? this.sandbox.getEnv() : process.env;
       const defaultArgs = this.sandbox ? this.sandbox.getDefaultArgs() : [];
       const args = [...defaultArgs, 'merge-tree', '--write-tree', '--stdin', '-z'];
@@ -95,11 +110,15 @@ export class BatchMergeCoordinator {
       let stderrText = '';
       let evaluatedCount = 0;
       let closed = false;
+      let parseError: Error | null = null;
 
       let timer: NodeJS.Timeout | undefined;
       if (this.timeoutMs > 0) {
         timer = setTimeout(() => {
           if (!closed) {
+            closed = true;
+            child.stdout.removeAllListeners('data');
+            child.stderr.removeAllListeners('data');
             child.kill('SIGKILL');
             // Mark remaining in chunk as timeout
             for (let i = evaluatedCount; i < chunkTasks.length; i++) {
@@ -114,17 +133,26 @@ export class BatchMergeCoordinator {
         }, this.timeoutMs);
       }
 
-      // Write all chunk inputs
-      for (const task of chunkTasks) {
-        if (task.base) {
-          child.stdin.write(`${task.base} -- ${task.branchA} ${task.branchB}\n`);
-        } else {
-          child.stdin.write(`${task.branchA} ${task.branchB}\n`);
+      // Handle EPIPE if git exits before stdin finishes writing
+      child.stdin.on('error', (err: NodeJS.ErrnoException) => {
+        if (err.code !== 'EPIPE' && err.code !== 'ERR_STREAM_DESTROYED') {
+          reject(err);
         }
-      }
-      child.stdin.end();
+      });
+
+      // Write all chunk inputs
+      const payload = chunkTasks
+        .map((task) =>
+          task.base
+            ? `${task.base} -- ${task.branchA} ${task.branchB}\n`
+            : `${task.branchA} ${task.branchB}\n`
+        )
+        .join('');
+
+      child.stdin.end(payload);
 
       child.stdout.on('data', (chunk: Buffer) => {
+        if (parseError) return;
         stdoutBuffer = Buffer.concat([stdoutBuffer, chunk]);
 
         // Try to parse as many blocks as possible
@@ -137,13 +165,18 @@ export class BatchMergeCoordinator {
             onEvaluation(evaluatedCount, parsed.evaluation);
             evaluatedCount++;
             offset += parsed.bytesConsumed;
-          } catch {
+          } catch (err) {
+            parseError = err instanceof Error ? err : new Error(String(err));
+            child.kill('SIGKILL');
             break;
           }
         }
 
         if (offset > 0) {
-          stdoutBuffer = stdoutBuffer.subarray(offset);
+          stdoutBuffer =
+            offset === stdoutBuffer.length
+              ? Buffer.alloc(0)
+              : Buffer.from(stdoutBuffer.subarray(offset));
         }
       });
 
@@ -160,11 +193,18 @@ export class BatchMergeCoordinator {
         closed = true;
         if (timer) clearTimeout(timer);
 
-        const errorOnCurrent = (code ?? 0) !== 0 && evaluatedCount < chunkTasks.length;
+        if (parseError) {
+          return reject(parseError);
+        }
+
+        const errorOnCurrent =
+          ((code ?? 0) !== 0 || evaluatedCount < chunkTasks.length) &&
+          evaluatedCount < chunkTasks.length;
+
         resolve({
           evaluatedCount,
           errorOnCurrent,
-          stderr: stderrText,
+          stderr: stderrText || (evaluatedCount < chunkTasks.length ? 'Unexpected EOF from git merge-tree' : ''),
         });
       });
     });
