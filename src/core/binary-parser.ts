@@ -8,7 +8,7 @@ export function categorizeConflict(rawType: string): ConflictCategory {
   if (normalized.includes('rename/delete')) return 'rename/delete';
   if (normalized.includes('rename/rename')) return 'rename/rename';
   if (normalized.includes('file/directory')) return 'file/directory';
-  if (normalized.includes('file location')) return 'file_location';
+  if (normalized.includes('file location') || normalized.includes('directory rename')) return 'file_location';
   if (normalized.includes('directory rename split')) return 'directory_rename_split';
   if (normalized.includes('distinct types')) return 'distinct_types';
   if (normalized.includes('rename collision')) return 'rename_collision';
